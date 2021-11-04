@@ -1,0 +1,77 @@
+# Example to use Singularity instead of containerd & nerdctl
+# $ limactl start ./singularity-debian.yaml
+# $ limactl shell singularity-debian singularity run -u -B $HOME:$HOME docker://alpine
+
+# This example requires Lima v0.7.0 or later
+images:
+- location: "https://cloud.debian.org/images/cloud/bullseye/daily/20220206-910/debian-11-generic-amd64-daily-20220206-910.qcow2"
+  arch: "x86_64"
+  digest: "sha512:ce95e238c92001122be7b95d49111418f5f43ba4db9ecf38b34f78604352300f24ca7d6e4bd830a8c8b0ea057eb1989a1d78bd8c60297cf4c6723cf2ba1c97f0"
+- location: "https://cloud.debian.org/images/cloud/bullseye/daily/20220206-910/debian-11-generic-arm64-daily-20220206-910.qcow2"
+  arch: "aarch64"
+  digest: "sha512:0142372661cd253db7dbc1886e889529e34536836e3a6ea3fa2aeb0dfa88eb88abb292daf26fd1664bb2bfaea09e2d98339576a40b099fa198a6852ee53c3737"
+mounts:
+- location: "~"
+- location: "/tmp/lima"
+  writable: true
+containerd:
+  system: false
+  user: false
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    command -v singularity >/dev/null 2>&1 && exit 0
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install --no-install-recommends -y \
+      build-essential \
+      uuid-dev \
+      libgpgme-dev \
+      squashfs-tools \
+      libseccomp-dev \
+      pkg-config \
+      cryptsetup-bin \
+      uidmap \
+      binfmt-support \
+      qemu-user \
+      qemu-user-static
+    case `uname -m` in
+      "x86_64")
+        apt-get install --no-install-recommends -y \
+          qemu-system-arm
+        curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz" | \
+        tar xz -C /usr/local
+        ;;
+      "aarch64")
+        apt-get install --no-install-recommends -y \
+          qemu-system-x86
+        curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-arm64.tar.gz" | \
+        tar xz -C /usr/local
+        ;;
+    esac
+    export PATH=/usr/local/go/bin:${PATH}
+    export GOPATH=/tmp/go
+    export GOCACHE=${GOPATH}/.cache
+    SINGULARITY_SRC=/tmp/singularity
+    mkdir -p ${SINGULARITY_SRC}
+    curl -fsSL "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_VERSION}/singularity-ce-${SINGULARITY_VERSION}.tar.gz" | \
+    tar xz -C ${SINGULARITY_SRC} --strip-components 1
+    cd ${SINGULARITY_SRC}
+    ./mconfig
+    make -C ./builddir
+    make -C ./builddir install
+    sed -i -e "/bind path = \/etc\/hosts/a bind path = \/Users" /usr/local/etc/singularity/singularity.conf
+    rm -rf ${GOPATH} ${SINGULARITY_SRC}
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 30s bash -c "until command -v singularity >/dev/null 2>&1; do sleep 3; done"; then
+      echo >&2 "singularity is not installed yet"
+      exit 1
+    fi
+  hint: See "/var/log/cloud-init-output.log". in the guest
+env:
+  GO_VERSION: 1.17.6
+  SINGULARITY_VERSION: 3.9.2
