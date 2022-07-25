@@ -1,0 +1,74 @@
+# Example to use Singularity instead of containerd & nerdctl
+# $ limactl start ./apptainer-debian.yaml
+# $ limactl shell apptainer-debian apptainer run -u -B $HOME:$HOME docker://alpine
+
+# This example requires Lima v0.7.0 or later
+images:
+- location: "https://cloud.debian.org/images/cloud/bullseye/20220711-1073/debian-11-generic-amd64-20220711-1073.qcow2"
+  arch: "x86_64"
+  digest: "sha512:6f6896d5740efb095d30e5118aeced30eda596dd5cddc28929767dc568f1833d84621a7b71d0aa403fcae3aef9c566ce7403b5a59dcaa74f6d3ea0e171ec38b0"
+- location: "https://cloud.debian.org/images/cloud/bullseye/20220711-1073/debian-11-generic-arm64-20220711-1073.qcow2"
+  arch: "aarch64"
+  digest: "sha512:ce07048a3760e22d96244f399fa242930eafb5b7a8fa0d0014e6616e86d0c38e544b2206154c6cc6eb1b3924b74d337725791b2305f59527c87a2fbd8a8e6bf1"
+mounts:
+- location: "~"
+- location: "/tmp/lima"
+  writable: true
+containerd:
+  system: false
+  user: false
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    command -v apptainer >/dev/null 2>&1 && exit 0
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install --no-install-recommends -y \
+      build-essential \
+      libseccomp-dev \
+      pkg-config \
+      squashfs-tools \
+      cryptsetup \
+      binfmt-support \
+      qemu-user \
+      qemu-user-static
+    case `uname -m` in
+      "x86_64")
+        apt-get install --no-install-recommends -y \
+          qemu-system-arm
+        curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | \
+        tar xz -C /usr/local
+        ;;
+      "aarch64")
+        apt-get install --no-install-recommends -y \
+          qemu-system-x86
+        curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" | \
+        tar xz -C /usr/local
+        ;;
+    esac
+    export PATH=/usr/local/go/bin:${PATH}
+    export GOPATH=/tmp/go
+    export GOCACHE=${GOPATH}/.cache
+    APPTAINER_SRC=/tmp/apptainer
+    mkdir -p ${APPTAINER_SRC}
+    curl -fsSL "https://github.com/apptainer/apptainer/releases/download/v${APPTAINER_VERSION}/apptainer-${APPTAINER_VERSION}.tar.gz" | \
+    tar xz -C ${APPTAINER_SRC} --strip-components 1
+    cd ${APPTAINER_SRC}
+    ./mconfig
+    make -C ./builddir
+    make -C ./builddir install
+    sed -i -e "/bind path = \/etc\/hosts/a bind path = \/Users" /usr/local/etc/apptainer/apptainer.conf
+    rm -rf ${GOPATH} ${APPTAINER_SRC}
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 30s bash -c "until command -v apptainer >/dev/null 2>&1; do sleep 3; done"; then
+      echo >&2 "apptainer is not installed yet"
+      exit 1
+    fi
+  hint: See "/var/log/cloud-init-output.log". in the guest
+env:
+  GO_VERSION: 1.18.4
+  APPTAINER_VERSION: 1.0.3
